@@ -1,0 +1,21 @@
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.21.0
+opencv-python>=4.7.0
+scipy>=1.7.0
+tqdm>=4.65.0
+PyYAML>=6.0
+
+# Model downloading
+huggingface-hub>=0.16.0
+
+# Optional: Object detection
+ultralytics>=8.0.0  # For YOLOv8 detector
+
+# Optional: Advanced tracking
+# bytetrack>=0.3.0  # Uncomment if you want ByteTrack support
+
+# Optional: For development
+# pytest>=7.0.0
+# black>=22.0.0
