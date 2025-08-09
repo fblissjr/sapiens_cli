@@ -14,6 +14,8 @@ import json
 from dataclasses import dataclass
 import time
 from collections import defaultdict
+import pickle
+import zipfile
 
 # Add local imports
 import sys
@@ -458,13 +460,111 @@ class SapiensTwoStagePipeline:
         self.total_people_tracked = 0
     
     def _load_pose_model(self, model_path: str):
-        """Load Sapiens pose model"""
-        if model_path.endswith('.pt2'):
-            # TorchScript model
-            model = torch.jit.load(model_path, map_location=self.device)
+        """Load Sapiens pose model - handles multiple formats"""
+        
+        # Try the simplest approach first - for TorchScript models
+        if '_torchscript' in model_path.lower() or (model_path.endswith('.pt2') and 'bfloat16' not in model_path.lower()):
+            try:
+                print("Loading as TorchScript model...")
+                model = torch.jit.load(model_path, map_location=self.device)
+                print("Successfully loaded TorchScript model")
+                model.eval()
+                return model
+            except Exception as e:
+                print(f"Failed to load as TorchScript: {e}")
+                pass
+        
+        # For .pth files with state_dict
+        if model_path.endswith('.pth'):
+            print("Loading PyTorch checkpoint...")
+            checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
+            
+            if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+                # This requires building the model architecture first
+                print("Checkpoint contains state_dict, building model architecture...")
+                
+                # Try to use mmpose to build the model
+                try:
+                    from mmpose.apis import init_model
+                    
+                    # Determine config based on model path
+                    if '0.3b' in model_path:
+                        size = '0.3b'
+                    elif '0.6b' in model_path:
+                        size = '0.6b'
+                    elif '1b' in model_path:
+                        size = '1b'
+                    elif '2b' in model_path:
+                        size = '2b'
+                    else:
+                        size = '1b'  # default
+                    
+                    # Look for config file
+                    config_pattern = f"sapiens_{size}*goliath*.py"
+                    import glob
+                    config_files = glob.glob(f"../pose/configs/sapiens_pose/**/{config_pattern}", recursive=True)
+                    
+                    if config_files:
+                        config_file = config_files[0]
+                        print(f"Using config: {config_file}")
+                        model = init_model(config_file, model_path, device=self.device)
+                        print("Successfully built and loaded model with mmpose")
+                        model.eval()
+                        return model
+                    else:
+                        print("No config file found, falling back...")
+                
+                except ImportError:
+                    print("mmpose not available or failed")
+                
+                # If mmpose fails, just return the checkpoint and hope it's a full model
+                if 'model' in checkpoint:
+                    model = checkpoint['model']
+                    print("Loaded model from checkpoint['model']")
+                else:
+                    print("Warning: Can't build model architecture for state_dict")
+                    raise NotImplementedError(
+                        "The .pth file contains only state_dict but model architecture is not available. "
+                        "Please use TorchScript (.pt2) models instead:\n"
+                        "- For fast inference: download torchscript models\n"
+                        "- Run: python cli/download_models.py --tasks pose --sizes 1b --formats torchscript"
+                    )
+            elif isinstance(checkpoint, torch.nn.Module):
+                model = checkpoint
+                print("Loaded complete model from checkpoint")
+            else:
+                model = checkpoint
+                print("Loaded model directly")
+        
+        # For bfloat16 or other .pt2 files
+        elif model_path.endswith('.pt2'):
+            print("Attempting to load .pt2 model...")
+            
+            # Check if it's an ExportedProgram
+            is_exported = False
+            try:
+                with zipfile.ZipFile(model_path, 'r') as zf:
+                    if 'serialized_exported_program.json' in zf.namelist():
+                        is_exported = True
+            except:
+                pass
+            
+            if is_exported or 'bfloat16' in model_path.lower():
+                print("Model appears to be ExportedProgram format")
+                print("WARNING: This model format has version compatibility issues with current PyTorch")
+                print("Please download and use TorchScript format models instead:")
+                print("  python cli/download_models.py --tasks pose --sizes 1b --formats torchscript")
+                raise RuntimeError(
+                    f"Cannot load ExportedProgram model due to PyTorch version mismatch.\n"
+                    f"Please use TorchScript models instead (download with --formats torchscript)"
+                )
+            else:
+                # Regular TorchScript
+                model = torch.jit.load(model_path, map_location=self.device)
+                print("Loaded as TorchScript model")
+        
         else:
-            # Regular PyTorch
-            model = torch.load(model_path, map_location=self.device)
+            raise ValueError(f"Unknown model format for file: {model_path}")
         
         model.eval()
         return model
@@ -866,6 +966,8 @@ def main():
     pipeline = SapiensTwoStagePipeline(
         pose_model_path=args.model,
         detector_method=args.detector,
+        tracker_method=args.tracker,
+        max_people=args.max_people,
         refinement=args.refinement
     )
     
