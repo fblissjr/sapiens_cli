@@ -850,6 +850,11 @@ def main():
     parser.add_argument('--detector', default='yolov8', 
                        choices=['yolov8', 'rtmdet'],
                        help='Detector method')
+    parser.add_argument('--tracker', default='iou',
+                       choices=['iou', 'bytetrack'],
+                       help='Tracking method')
+    parser.add_argument('--max-people', type=int, default=20,
+                       help='Maximum people to track')
     parser.add_argument('--refinement', default='dark_udp',
                        choices=['dark_udp', 'dark', 'simple', 'none'],
                        help='Refinement method')
