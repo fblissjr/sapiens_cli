@@ -313,9 +313,19 @@ class PoseProcessor:
         
         return keypoints
     
-    def draw_pose(self, image: np.ndarray, keypoints: Dict) -> np.ndarray:
-        """Draw pose skeleton on image"""
-        img = image.copy()
+    def draw_pose(self, image: np.ndarray, keypoints: Dict, overlay: bool = False) -> np.ndarray:
+        """Draw pose skeleton on image or black background
+        
+        Args:
+            image: Input image
+            keypoints: Detected keypoints
+            overlay: If True, draw on original image. If False, draw on black background.
+        """
+        if overlay:
+            img = image.copy()
+        else:
+            # Create black background of same size
+            img = np.zeros_like(image)
         
         # Draw skeleton connections
         for link_info in GOLIATH_SKELETON_INFO.values():
@@ -344,7 +354,7 @@ class PoseProcessor:
 
 
 def process_video(video_path: str, output_path: str, model_path: str, 
-                  max_frames: Optional[int] = None):
+                  max_frames: Optional[int] = None, overlay: bool = False):
     """Process video with pose estimation"""
     
     # Load model
@@ -423,7 +433,11 @@ def process_video(video_path: str, output_path: str, model_path: str,
         
         # Draw and save
         if keypoints:
-            frame = pose_processor.draw_pose(frame, keypoints)
+            frame = pose_processor.draw_pose(frame, keypoints, overlay=overlay)
+        else:
+            # If no keypoints, write black frame or original based on overlay setting
+            if not overlay:
+                frame = np.zeros_like(frame)
         out.write(frame)
         
         frame_count += 1
@@ -628,6 +642,8 @@ Examples:
     parser.add_argument('--benchmark', action='store_true', help='Run benchmark mode')
     parser.add_argument('--benchmark-iterations', type=int, default=100, 
                        help='Number of iterations for benchmark')
+    parser.add_argument('--overlay', action='store_true', 
+                       help='Overlay pose on original video (default: features only on black background)')
     
     args = parser.parse_args()
     
@@ -671,7 +687,7 @@ Examples:
         
         # Process based on input type
         if input_path.suffix.lower() in ['.mp4', '.avi', '.mov', '.mkv', '.webm']:
-            process_video(args.input, args.output, args.model, args.max_frames)
+            process_video(args.input, args.output, args.model, args.max_frames, args.overlay)
         else:
             process_image(args.input, args.output, args.model)
     else:

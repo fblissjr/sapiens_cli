@@ -1,121 +1,175 @@
 #!/usr/bin/env python
 """
-Sapiens CLI - Human pose, depth, segmentation, and normal estimation
+Unified Sapiens CLI - All pipelines in one command
 """
 
 import argparse
 import sys
 from pathlib import Path
 
-
 def main():
     parser = argparse.ArgumentParser(
-        description="Sapiens pipeline for human understanding",
+        description="Sapiens - Unified pipeline for human pose and segmentation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Single person, pose only
+  sapiens input.mp4 output.mp4 --pose checkpoints/pose/torchscript/1b/*.pt2
+  
+  # Multi-person with tracking, pose + segmentation
+  sapiens input.mp4 output.mp4 --pose model.pt2 --seg model.pt2 --multi --track
+  
+  # Test on 5 frames with all features
+  sapiens input.mp4 test.mp4 --pose model.pt2 --seg model.pt2 --multi --track --max-frames 5
+  
+  # Features on original video (overlay)
+  sapiens input.mp4 output.mp4 --pose model.pt2 --overlay
+  
   # Download models
-  python sapiens.py download --tasks pose --sizes 1b --formats torchscript
-  
-  # Process video with full pipeline (detection + tracking + pose)
-  python sapiens.py process video.mp4 output/ --model pose_model.pt2
-  
-  # Simple inference without detection (single person)
-  python sapiens.py infer video.mp4 output.mp4 --model pose_model.pt2
-  
-  # Benchmark model
-  python sapiens.py benchmark --model pose_model.pt2
+  sapiens --download pose seg --size 1b
         """
     )
     
-    subparsers = parser.add_subparsers(dest='command', help='Commands')
+    # Main arguments
+    parser.add_argument('input', nargs='?', help='Input video/image path')
+    parser.add_argument('output', nargs='?', help='Output video/image path')
+    
+    # Model selection
+    parser.add_argument('--pose', help='Path to pose model (.pt2)')
+    parser.add_argument('--seg', help='Path to segmentation model (.pt2)')
+    
+    # Pipeline options
+    parser.add_argument('--multi', action='store_true',
+                       help='Enable multi-person detection (default: single person)')
+    parser.add_argument('--track', action='store_true',
+                       help='Enable tracking (requires --multi)')
+    parser.add_argument('--overlay', action='store_true',
+                       help='Overlay on original video (default: black background)')
+    parser.add_argument('--refinement', choices=['dark_udp', 'dark', 'none'],
+                       default='dark_udp',
+                       help='Keypoint refinement method')
+    
+    # Processing options
+    parser.add_argument('--max-frames', type=int,
+                       help='Maximum frames to process')
+    parser.add_argument('--detector', default='yolov8m',
+                       help='Detector model for multi-person (default: yolov8m)')
+    parser.add_argument('--side-by-side', action='store_true',
+                       help='Show pose and segmentation side by side')
     
     # Download command
-    download_parser = subparsers.add_parser('download', help='Download Sapiens models')
-    download_parser.add_argument('--tasks', nargs='+', 
-                                 choices=['pose', 'seg', 'depth', 'normal', 'all'],
-                                 help='Tasks to download')
-    download_parser.add_argument('--sizes', nargs='+',
-                                 choices=['0.3b', '0.6b', '1b', '2b', 'all'],
-                                 help='Model sizes')
-    download_parser.add_argument('--formats', nargs='+',
-                                 choices=['pytorch', 'torchscript', 'all'],
-                                 help='Model formats')
+    parser.add_argument('--download', nargs='+',
+                       choices=['pose', 'seg', 'depth', 'normal', 'all'],
+                       help='Download models')
+    parser.add_argument('--size', default='1b',
+                       choices=['0.3b', '0.6b', '1b', '2b'],
+                       help='Model size for download')
     
-    # Process command (full pipeline)
-    process_parser = subparsers.add_parser('process', 
-                                           help='Process with full pipeline (detection + tracking + pose)')
-    process_parser.add_argument('input', help='Input video or image')
-    process_parser.add_argument('output', help='Output directory')
-    process_parser.add_argument('--model', required=True, help='Pose model path')
-    process_parser.add_argument('--detector', default='yolov8',
-                               choices=['yolov8', 'rtmdet'],
-                               help='Person detector')
-    process_parser.add_argument('--tracker', default='iou',
-                               choices=['iou', 'bytetrack'],
-                               help='Tracking method')
-    process_parser.add_argument('--max-people', type=int, default=20,
-                               help='Maximum people to track')
-    process_parser.add_argument('--refinement', default='dark_udp',
-                               choices=['dark_udp', 'dark', 'simple', 'none'],
-                               help='Keypoint refinement method')
-    
-    # Infer command (simple, no detection)
-    infer_parser = subparsers.add_parser('infer',
-                                         help='Simple inference without detection')
-    infer_parser.add_argument('input', help='Input video or image')
-    infer_parser.add_argument('output', help='Output path')
-    infer_parser.add_argument('--model', required=True, help='Model path')
-    infer_parser.add_argument('--max-frames', type=int, help='Max frames to process')
-    
-    # Benchmark command
-    bench_parser = subparsers.add_parser('benchmark', help='Benchmark model performance')
-    bench_parser.add_argument('--model', required=True, help='Model path')
-    bench_parser.add_argument('--iterations', type=int, default=100,
-                             help='Number of iterations')
+    # Benchmark
+    parser.add_argument('--benchmark', action='store_true',
+                       help='Run benchmark mode')
     
     args = parser.parse_args()
     
-    if not args.command:
+    # Handle download
+    if args.download:
+        from download_models import main as download_main
+        sys.argv = ['download_models.py']
+        
+        # Map 'all' to individual tasks
+        tasks = args.download
+        if 'all' in tasks:
+            tasks = ['pose', 'seg', 'depth', 'normal']
+        
+        sys.argv.extend(['--tasks'] + tasks)
+        sys.argv.extend(['--sizes', args.size])
+        sys.argv.extend(['--formats', 'torchscript'])  # Always use torchscript
+        return download_main()
+    
+    # Check input/output provided
+    if not args.input or not args.output:
+        print("Error: Please provide input and output paths")
         parser.print_help()
         return 1
     
-    if args.command == 'download':
-        from download_models import main as download_main
-        sys.argv = ['download_models.py']
-        if args.tasks:
-            sys.argv.extend(['--tasks'] + args.tasks)
-        if args.sizes:
-            sys.argv.extend(['--sizes'] + args.sizes)
-        if args.formats:
-            sys.argv.extend(['--formats'] + args.formats)
-        return download_main()
+    # Check model provided
+    if not args.pose and not args.seg:
+        print("Error: Please provide at least one model (--pose or --seg)")
+        return 1
     
-    elif args.command == 'process':
-        from sapiens_full_pipeline import main as pipeline_main
-        sys.argv = ['sapiens_full_pipeline.py', args.input, args.output,
-                   '--model', args.model,
-                   '--detector', args.detector,
-                   '--tracker', args.tracker,
-                   '--max-people', str(args.max_people),
-                   '--refinement', args.refinement]
-        return pipeline_main()
+    # Route to appropriate pipeline
+    if args.multi:
+        # Multi-person pipeline
+        if not args.track:
+            print("Note: Multi-person mode works best with tracking (add --track)")
+        
+        from sapiens_multi_person import MultiPersonSapiens
+        
+        pipeline = MultiPersonSapiens(
+            pose_model_path=args.pose if args.pose else None,
+            seg_model_path=args.seg if args.seg else None,
+            detector=args.detector,
+            use_tracking=args.track
+        )
+        
+        # Note: overlay not supported in multi-person mode yet
+        if args.overlay:
+            print("Warning: Overlay not supported in multi-person mode, using black background")
+        
+        pipeline.process_video(
+            args.input,
+            args.output,
+            max_frames=args.max_frames,
+            show_seg=(args.seg is not None)
+        )
+        
+    elif args.side_by_side and args.pose and args.seg:
+        # Side-by-side visualization
+        from sapiens_combined import process_video_combined
+        
+        process_video_combined(
+            args.input,
+            args.output,
+            args.pose,
+            args.seg,
+            max_frames=args.max_frames,
+            mode='side_by_side'
+        )
+        
+    elif args.pose and not args.seg:
+        # Pose only
+        from sapiens_inference import process_video, process_image
+        from pathlib import Path
+        
+        input_path = Path(args.input)
+        if input_path.suffix.lower() in ['.mp4', '.avi', '.mov', '.mkv', '.webm']:
+            process_video(args.input, args.output, args.pose, 
+                         args.max_frames, args.overlay)
+        else:
+            process_image(args.input, args.output, args.pose)
+            
+    elif args.seg and not args.pose:
+        # Segmentation only
+        from sapiens_segmentation import process_video
+        
+        process_video(args.input, args.output, args.seg,
+                     args.max_frames, args.overlay)
+                     
+    else:
+        # Both pose and seg but not side-by-side
+        from sapiens_combined import process_video_combined
+        
+        mode = 'overlay' if args.overlay else 'blend'
+        process_video_combined(
+            args.input,
+            args.output,
+            args.pose,
+            args.seg,
+            max_frames=args.max_frames,
+            mode=mode
+        )
     
-    elif args.command == 'infer':
-        from sapiens_inference import main as infer_main
-        sys.argv = ['sapiens_inference.py', args.input, args.output,
-                   '--model', args.model]
-        if args.max_frames:
-            sys.argv.extend(['--max-frames', str(args.max_frames)])
-        return infer_main()
-    
-    elif args.command == 'benchmark':
-        from sapiens_inference import main as bench_main
-        sys.argv = ['sapiens_inference.py', '--benchmark',
-                   '--model', args.model,
-                   '--benchmark-iterations', str(args.iterations)]
-        return bench_main()
-    
+    print(f"\nProcessing complete! Output saved to: {args.output}")
     return 0
 
 
