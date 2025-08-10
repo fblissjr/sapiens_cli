@@ -219,15 +219,9 @@ class MultiPersonSapiens:
         
         # Draw each person
         for person in people:
-            # Draw bounding box
             x1, y1, x2, y2 = [int(x) for x in person.bbox]
-            color = self._get_track_color(person.track_id)
-            cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2)
             
-            # Draw track ID
-            cv2.putText(canvas, f"ID: {person.track_id}", 
-                       (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 
-                       0.5, color, 2)
+            # Removed bounding box and ID drawing - only show features
             
             # Draw pose skeleton
             if person.keypoints:
